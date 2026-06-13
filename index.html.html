@@ -1,0 +1,615 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CourseTrack – Content Team</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #F6F6F9; font-family: 'DM Sans', sans-serif; }
+  select, input, button, textarea { font-family: 'DM Sans', sans-serif; }
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: #F0F0F3; }
+  ::-webkit-scrollbar-thumb { background: #CCCCDA; border-radius: 3px; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useCallback } = React;
+
+const BASE_ID = "applDRxU3LZuybIgL";
+const TABLE_ID = "tblazVW9k2dwzTWwr";
+const COURSES_TABLE = "Courses";
+
+const TEAM = [
+  { id: "Abigail Hill",  name: "Abigail Hill",  avatar: "AH", color: "#6B7FD7" },
+  { id: "Mehul Patel",   name: "Mehul Patel",   avatar: "MP", color: "#D4845A" },
+  { id: "Louise Harris", name: "Louise Harris", avatar: "LH", color: "#5AA88A" },
+  { id: "Ami Isaacs",    name: "Ami Isaacs",    avatar: "AI", color: "#B07BD4" },
+  { id: "Ray Horton",    name: "Ray Horton",    avatar: "RH", color: "#D4A027" },
+];
+
+const STATUSES  = ["To Do", "In Progress", "Review", "Done"];
+const PRIORITIES = ["High", "Medium", "Low"];
+const PRIORITY_COLOR = { High: "#E05C5C", Medium: "#D4A027", Low: "#5AA88A" };
+const STATUS_BG  = { "To Do": "#F3F3F3", "In Progress": "#EDF2FF", "Review": "#FFF8ED", "Done": "#EDFAF3" };
+const STATUS_DOT = { "To Do": "#BBBCC0", "In Progress": "#6B7FD7", "Review": "#D4A027", "Done": "#5AA88A" };
+
+// ── Airtable helpers ──────────────────────────────────────────────────────────
+function airtableHeaders(token) {
+  return { Authorization: `Bearer ${token}`, "Content-Type": "application/json" };
+}
+
+async function fetchAllRecords(token, tableIdOrName) {
+  let records = [], offset = null;
+  do {
+    const url = `https://api.airtable.com/v0/${BASE_ID}/${encodeURIComponent(tableIdOrName)}?pageSize=100${offset ? "&offset=" + offset : ""}`;
+    const res = await fetch(url, { headers: airtableHeaders(token) });
+    if (!res.ok) throw new Error(`Airtable error: ${res.status}`);
+    const data = await res.json();
+    records = records.concat(data.records);
+    offset = data.offset;
+  } while (offset);
+  return records;
+}
+
+function recordToTask(r) {
+  const f = r.fields;
+  return {
+    id: r.id,
+    airtableId: r.id,
+    title: f.Title || "",
+    course: f.Course || "",
+    assignee: f.Assignee || "",
+    priority: f.Priority || "Medium",
+    status: f.Status || "To Do",
+    due: f.Due || "",
+    tags: f.Tags || [],
+  };
+}
+
+async function createRecord(token, fields) {
+  const res = await fetch(`https://api.airtable.com/v0/${BASE_ID}/${TABLE_ID}`, {
+    method: "POST",
+    headers: airtableHeaders(token),
+    body: JSON.stringify({ fields }),
+  });
+  if (!res.ok) throw new Error(`Create failed: ${res.status}`);
+  return await res.json();
+}
+
+async function updateRecord(token, recordId, fields) {
+  const res = await fetch(`https://api.airtable.com/v0/${BASE_ID}/${TABLE_ID}/${recordId}`, {
+    method: "PATCH",
+    headers: airtableHeaders(token),
+    body: JSON.stringify({ fields }),
+  });
+  if (!res.ok) throw new Error(`Update failed: ${res.status}`);
+  return await res.json();
+}
+
+async function deleteRecord(token, recordId) {
+  const res = await fetch(`https://api.airtable.com/v0/${BASE_ID}/${TABLE_ID}/${recordId}`, {
+    method: "DELETE",
+    headers: airtableHeaders(token),
+  });
+  if (!res.ok) throw new Error(`Delete failed: ${res.status}`);
+}
+
+function taskToFields(task) {
+  return {
+    Title: task.title,
+    Course: task.course,
+    Assignee: task.assignee,
+    Priority: task.priority,
+    Status: task.status,
+    Due: task.due || null,
+    Tags: task.tags || [],
+  };
+}
+
+// ── UI Components ─────────────────────────────────────────────────────────────
+function Avatar({ member, size = 32 }) {
+  return (
+    <div style={{
+      width: size, height: size, borderRadius: "50%",
+      background: member.color, color: "#fff",
+      display: "flex", alignItems: "center", justifyContent: "center",
+      fontSize: size * 0.35, fontWeight: 600, flexShrink: 0,
+    }}>{member.avatar}</div>
+  );
+}
+
+function Spinner() {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: 300, gap: 16 }}>
+      <div style={{
+        width: 36, height: 36, borderRadius: "50%",
+        border: "3px solid #EBEBEB", borderTopColor: "#6B7FD7",
+        animation: "spin 0.8s linear infinite",
+      }} />
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+      <span style={{ fontSize: 13, color: "#8A8FA8" }}>Loading tasks from Airtable…</span>
+    </div>
+  );
+}
+
+function Toast({ message, type }) {
+  return (
+    <div style={{
+      position: "fixed", bottom: 24, right: 24, zIndex: 200,
+      background: type === "error" ? "#E05C5C" : "#1A1A2E",
+      color: "#fff", borderRadius: 8, padding: "10px 18px",
+      fontSize: 13, fontWeight: 500, boxShadow: "0 4px 20px rgba(0,0,0,0.2)",
+    }}>{message}</div>
+  );
+}
+
+function TaskCard({ task, team, onEdit }) {
+  const member = team.find(t => t.id === task.assignee);
+  const isOverdue = task.due && new Date(task.due) < new Date() && task.status !== "Done";
+  const [hovered, setHovered] = useState(false);
+  return (
+    <div onClick={() => onEdit(task)}
+      onMouseEnter={() => setHovered(true)} onMouseLeave={() => setHovered(false)}
+      style={{
+        background: "#fff", border: "1px solid #EBEBEB", borderRadius: 10,
+        padding: "14px 16px", cursor: "pointer", marginBottom: 10,
+        boxShadow: hovered ? "0 4px 16px rgba(0,0,0,0.08)" : "none",
+        transform: hovered ? "translateY(-1px)" : "none",
+        transition: "box-shadow 0.15s, transform 0.15s",
+      }}>
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 8, marginBottom: 8 }}>
+        <span style={{ fontSize: 13.5, fontWeight: 500, color: "#1A1A2E", lineHeight: 1.4 }}>{task.title}</span>
+        <span style={{ fontSize: 11, fontWeight: 600, color: PRIORITY_COLOR[task.priority], background: PRIORITY_COLOR[task.priority] + "18", borderRadius: 5, padding: "2px 7px", whiteSpace: "nowrap", flexShrink: 0 }}>{task.priority}</span>
+      </div>
+      {task.course && <div style={{ fontSize: 11.5, color: "#8A8FA8", marginBottom: 8 }}>{task.course}</div>}
+      {task.tags && task.tags.length > 0 && (
+        <div style={{ display: "flex", gap: 5, flexWrap: "wrap", marginBottom: 10 }}>
+          {task.tags.map(tag => (
+            <span key={tag} style={{ fontSize: 10.5, background: "#F4F4F8", color: "#6B7080", borderRadius: 4, padding: "2px 7px" }}>{tag}</span>
+          ))}
+        </div>
+      )}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        {member ? <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <Avatar member={member} size={22} />
+          <span style={{ fontSize: 11.5, color: "#8A8FA8" }}>{member.name.split(" ")[0]}</span>
+        </div> : <span />}
+        {task.due && <span style={{ fontSize: 11.5, color: isOverdue ? "#E05C5C" : "#8A8FA8", fontWeight: isOverdue ? 600 : 400 }}>
+          {isOverdue ? "⚠ " : ""}Due {new Date(task.due + "T12:00:00").toLocaleDateString("en-GB", { month: "short", day: "numeric" })}
+        </span>}
+      </div>
+    </div>
+  );
+}
+
+function KanbanView({ tasks, team, onEdit }) {
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 16, alignItems: "start" }}>
+      {STATUSES.map(status => {
+        const col = tasks.filter(t => t.status === status);
+        return (
+          <div key={status}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+              <div style={{ width: 8, height: 8, borderRadius: "50%", background: STATUS_DOT[status] }} />
+              <span style={{ fontSize: 12.5, fontWeight: 600, color: "#4A4D5E", textTransform: "uppercase", letterSpacing: "0.05em" }}>{status}</span>
+              <span style={{ marginLeft: "auto", fontSize: 11.5, background: "#F0F0F3", color: "#8A8FA8", borderRadius: 10, padding: "1px 8px" }}>{col.length}</span>
+            </div>
+            <div style={{ background: "#FAFAFA", borderRadius: 10, padding: "10px 10px 4px", minHeight: 120 }}>
+              {col.map(task => <TaskCard key={task.id} task={task} team={team} onEdit={onEdit} />)}
+              {col.length === 0 && <div style={{ color: "#C8C9D0", fontSize: 12.5, textAlign: "center", padding: "20px 0" }}>No tasks</div>}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function ListView({ tasks, team, onEdit }) {
+  return (
+    <div style={{ background: "#fff", borderRadius: 10, border: "1px solid #EBEBEB", overflow: "hidden" }}>
+      <div style={{ display: "grid", gridTemplateColumns: "2fr 1.2fr 1fr 1fr 1fr 1fr", padding: "10px 18px", background: "#F8F8FA", borderBottom: "1px solid #EBEBEB", gap: 8 }}>
+        {["Task", "Course", "Assignee", "Priority", "Status", "Due"].map(h => (
+          <span key={h} style={{ fontSize: 11.5, fontWeight: 600, color: "#8A8FA8", textTransform: "uppercase", letterSpacing: "0.06em" }}>{h}</span>
+        ))}
+      </div>
+      {tasks.length === 0 && <div style={{ padding: 32, textAlign: "center", color: "#B0B3C0", fontSize: 13 }}>No tasks yet. Create one with + New Task.</div>}
+      {tasks.map((task, i) => {
+        const member = team.find(t => t.id === task.assignee);
+        const isOverdue = task.due && new Date(task.due) < new Date() && task.status !== "Done";
+        const [hov, setHov] = useState(false);
+        return (
+          <div key={task.id} onClick={() => onEdit(task)}
+            onMouseEnter={() => setHov(true)} onMouseLeave={() => setHov(false)}
+            style={{ display: "grid", gridTemplateColumns: "2fr 1.2fr 1fr 1fr 1fr 1fr", padding: "12px 18px", gap: 8, borderBottom: i < tasks.length - 1 ? "1px solid #F0F0F3" : "none", cursor: "pointer", background: hov ? "#FAFAFA" : "transparent", alignItems: "center", transition: "background 0.12s" }}>
+            <span style={{ fontSize: 13, fontWeight: 500, color: "#1A1A2E" }}>{task.title}</span>
+            <span style={{ fontSize: 12.5, color: "#6B7080" }}>{task.course}</span>
+            {member ? <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <Avatar member={member} size={22} />
+              <span style={{ fontSize: 12, color: "#6B7080" }}>{member.name.split(" ")[0]}</span>
+            </div> : <span style={{ fontSize: 12, color: "#B0B3C0" }}>—</span>}
+            <span style={{ fontSize: 11.5, fontWeight: 600, color: PRIORITY_COLOR[task.priority], background: PRIORITY_COLOR[task.priority] + "18", borderRadius: 5, padding: "2px 8px", display: "inline-block" }}>{task.priority}</span>
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <div style={{ width: 7, height: 7, borderRadius: "50%", background: STATUS_DOT[task.status] }} />
+              <span style={{ fontSize: 12, color: "#4A4D5E" }}>{task.status}</span>
+            </div>
+            <span style={{ fontSize: 12, color: isOverdue ? "#E05C5C" : "#8A8FA8", fontWeight: isOverdue ? 600 : 400 }}>
+              {task.due ? (isOverdue ? "⚠ " : "") + new Date(task.due + "T12:00:00").toLocaleDateString("en-GB", { month: "short", day: "numeric" }) : "—"}
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function WorkloadView({ tasks, team }) {
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 16 }}>
+      {team.map(member => {
+        const mt = tasks.filter(t => t.assignee === member.id);
+        const byStatus = STATUSES.map(s => ({ status: s, count: mt.filter(t => t.status === s).length }));
+        const highCount = mt.filter(t => t.priority === "High" && t.status !== "Done").length;
+        return (
+          <div key={member.id} style={{ background: "#fff", border: "1px solid #EBEBEB", borderRadius: 10, padding: 20 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
+              <Avatar member={member} size={40} />
+              <div>
+                <div style={{ fontSize: 14.5, fontWeight: 600, color: "#1A1A2E" }}>{member.name}</div>
+                <div style={{ fontSize: 12, color: "#8A8FA8" }}>Developer</div>
+              </div>
+              {highCount > 0 && <span style={{ marginLeft: "auto", fontSize: 11.5, background: "#FEF0F0", color: "#E05C5C", borderRadius: 6, padding: "3px 8px", fontWeight: 600 }}>{highCount} urgent</span>}
+            </div>
+            <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+              {byStatus.map(({ status, count }) => (
+                <div key={status} style={{ flex: 1, textAlign: "center", background: STATUS_BG[status], borderRadius: 7, padding: "8px 4px" }}>
+                  <div style={{ fontSize: 20, fontWeight: 700, color: STATUS_DOT[status], fontFamily: "'DM Serif Display', serif" }}>{count}</div>
+                  <div style={{ fontSize: 10, color: "#8A8FA8" }}>{status}</div>
+                </div>
+              ))}
+            </div>
+            <div style={{ background: "#F8F8FA", borderRadius: 7, overflow: "hidden", height: 6, display: "flex" }}>
+              {byStatus.map(({ status, count }) => count > 0 && (
+                <div key={status} style={{ flex: count, background: STATUS_DOT[status] }} />
+              ))}
+            </div>
+            <div style={{ marginTop: 12 }}>
+              {mt.filter(t => t.status !== "Done").slice(0, 3).map(task => (
+                <div key={task.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "5px 0", borderBottom: "1px solid #F3F3F3" }}>
+                  <div style={{ width: 6, height: 6, borderRadius: "50%", background: PRIORITY_COLOR[task.priority], flexShrink: 0 }} />
+                  <span style={{ fontSize: 12, color: "#4A4D5E", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{task.title}</span>
+                  {task.due && <span style={{ fontSize: 11, color: "#B0B3C0", whiteSpace: "nowrap" }}>
+                    {new Date(task.due + "T12:00:00").toLocaleDateString("en-GB", { month: "short", day: "numeric" })}
+                  </span>}
+                </div>
+              ))}
+              {mt.filter(t => t.status !== "Done").length === 0 && <div style={{ fontSize: 12, color: "#C8C9D0", textAlign: "center", padding: "8px 0" }}>No active tasks</div>}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function TaskModal({ task, team, courses, onClose, onSave, onDelete, isNew, saving }) {
+  const [form, setForm] = useState(task || {
+    title: "", course: courses[0] || "", assignee: team[0].id,
+    priority: "Medium", status: "To Do", due: "", tags: [],
+  });
+  const [tagInput, setTagInput] = useState("");
+  const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
+  const addTag = () => { if (tagInput.trim()) { set("tags", [...(form.tags || []), tagInput.trim()]); setTagInput(""); } };
+
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(10,10,20,0.35)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 100 }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: "#fff", borderRadius: 14, padding: 28, width: 500, maxHeight: "85vh", overflowY: "auto", boxShadow: "0 20px 60px rgba(0,0,0,0.18)" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 22 }}>
+          <span style={{ fontFamily: "'DM Serif Display', serif", fontSize: 20, color: "#1A1A2E" }}>{isNew ? "New Task" : "Edit Task"}</span>
+          <button onClick={onClose} style={{ background: "none", border: "none", fontSize: 22, cursor: "pointer", color: "#8A8FA8" }}>×</button>
+        </div>
+        <div style={{ marginBottom: 14 }}>
+          <label style={{ fontSize: 11.5, fontWeight: 600, color: "#8A8FA8", display: "block", marginBottom: 5, textTransform: "uppercase", letterSpacing: "0.06em" }}>Task Title</label>
+          <input value={form.title} onChange={e => set("title", e.target.value)} style={{ width: "100%", padding: "8px 12px", border: "1.5px solid #EBEBEB", borderRadius: 7, fontSize: 13.5, outline: "none", color: "#1A1A2E" }} />
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 14 }}>
+          <div>
+            <label style={{ fontSize: 11.5, fontWeight: 600, color: "#8A8FA8", display: "block", marginBottom: 5, textTransform: "uppercase", letterSpacing: "0.06em" }}>Course</label>
+            <input value={form.course} onChange={e => set("course", e.target.value)} list="course-list" style={{ width: "100%", padding: "8px 10px", border: "1.5px solid #EBEBEB", borderRadius: 7, fontSize: 13, outline: "none", color: "#1A1A2E" }} />
+            <datalist id="course-list">{courses.map(c => <option key={c} value={c} />)}</datalist>
+          </div>
+          <div>
+            <label style={{ fontSize: 11.5, fontWeight: 600, color: "#8A8FA8", display: "block", marginBottom: 5, textTransform: "uppercase", letterSpacing: "0.06em" }}>Assignee</label>
+            <select value={form.assignee} onChange={e => set("assignee", e.target.value)} style={{ width: "100%", padding: "8px 10px", border: "1.5px solid #EBEBEB", borderRadius: 7, fontSize: 13, outline: "none", color: "#1A1A2E", background: "#fff" }}>
+              {team.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+            </select>
+          </div>
+          <div>
+            <label style={{ fontSize: 11.5, fontWeight: 600, color: "#8A8FA8", display: "block", marginBottom: 5, textTransform: "uppercase", letterSpacing: "0.06em" }}>Priority</label>
+            <select value={form.priority} onChange={e => set("priority", e.target.value)} style={{ width: "100%", padding: "8px 10px", border: "1.5px solid #EBEBEB", borderRadius: 7, fontSize: 13, outline: "none", color: "#1A1A2E", background: "#fff" }}>
+              {PRIORITIES.map(p => <option key={p}>{p}</option>)}
+            </select>
+          </div>
+          <div>
+            <label style={{ fontSize: 11.5, fontWeight: 600, color: "#8A8FA8", display: "block", marginBottom: 5, textTransform: "uppercase", letterSpacing: "0.06em" }}>Status</label>
+            <select value={form.status} onChange={e => set("status", e.target.value)} style={{ width: "100%", padding: "8px 10px", border: "1.5px solid #EBEBEB", borderRadius: 7, fontSize: 13, outline: "none", color: "#1A1A2E", background: "#fff" }}>
+              {STATUSES.map(s => <option key={s}>{s}</option>)}
+            </select>
+          </div>
+        </div>
+        <div style={{ marginBottom: 14 }}>
+          <label style={{ fontSize: 11.5, fontWeight: 600, color: "#8A8FA8", display: "block", marginBottom: 5, textTransform: "uppercase", letterSpacing: "0.06em" }}>Due Date</label>
+          <input type="date" value={form.due} onChange={e => set("due", e.target.value)} style={{ width: "100%", padding: "8px 12px", border: "1.5px solid #EBEBEB", borderRadius: 7, fontSize: 13, outline: "none", color: "#1A1A2E" }} />
+        </div>
+        <div style={{ marginBottom: 22 }}>
+          <label style={{ fontSize: 11.5, fontWeight: 600, color: "#8A8FA8", display: "block", marginBottom: 5, textTransform: "uppercase", letterSpacing: "0.06em" }}>Tags</label>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 6 }}>
+            {(form.tags || []).map(tag => (
+              <span key={tag} style={{ fontSize: 11.5, background: "#F4F4F8", color: "#6B7080", borderRadius: 5, padding: "2px 8px", display: "flex", alignItems: "center", gap: 4 }}>
+                {tag}
+                <span onClick={() => set("tags", form.tags.filter(t => t !== tag))} style={{ cursor: "pointer", color: "#BBBCC0", fontSize: 14 }}>×</span>
+              </span>
+            ))}
+          </div>
+          <div style={{ display: "flex", gap: 6 }}>
+            <input value={tagInput} onChange={e => setTagInput(e.target.value)}
+              onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); addTag(); } }}
+              placeholder="Add tag, press Enter"
+              style={{ flex: 1, padding: "7px 10px", border: "1.5px solid #EBEBEB", borderRadius: 7, fontSize: 12.5, outline: "none", color: "#1A1A2E" }} />
+            <button onClick={addTag} style={{ padding: "7px 12px", border: "1.5px solid #EBEBEB", borderRadius: 7, background: "none", cursor: "pointer", fontSize: 12.5, color: "#6B7080" }}>Add</button>
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 10, justifyContent: "space-between" }}>
+          {!isNew && <button onClick={() => onDelete(task.airtableId)} style={{ padding: "8px 14px", borderRadius: 7, border: "1.5px solid #F0D0D0", background: "none", cursor: "pointer", fontSize: 13, color: "#E05C5C" }}>Delete</button>}
+          <div style={{ display: "flex", gap: 10, marginLeft: "auto" }}>
+            <button onClick={onClose} style={{ padding: "8px 18px", borderRadius: 7, border: "1.5px solid #EBEBEB", background: "none", cursor: "pointer", fontSize: 13, color: "#6B7080" }}>Cancel</button>
+            <button onClick={() => onSave(form)} disabled={saving || !form.title.trim()} style={{ padding: "8px 22px", borderRadius: 7, border: "none", background: saving ? "#8A8FA8" : "#1A1A2E", color: "#fff", cursor: saving ? "not-allowed" : "pointer", fontSize: 13, fontWeight: 500 }}>
+              {saving ? "Saving…" : isNew ? "Create Task" : "Save Changes"}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SetupScreen({ onConnect }) {
+  const [token, setToken] = useState("");
+  const [testing, setTesting] = useState(false);
+  const [error, setError] = useState("");
+  const test = async () => {
+    if (!token.trim()) return;
+    setTesting(true); setError("");
+    try {
+      const res = await fetch(`https://api.airtable.com/v0/${BASE_ID}/${TABLE_ID}?maxRecords=1`, { headers: airtableHeaders(token.trim()) });
+      if (!res.ok) throw new Error("Invalid token or no access to this base.");
+      localStorage.setItem("ct_token", token.trim());
+      onConnect(token.trim());
+    } catch (e) { setError(e.message); }
+    setTesting(false);
+  };
+  return (
+    <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "#F6F6F9" }}>
+      <div style={{ background: "#fff", borderRadius: 16, padding: 40, width: 440, boxShadow: "0 8px 40px rgba(0,0,0,0.1)" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 28 }}>
+          <div style={{ width: 36, height: 36, borderRadius: 9, background: "#1A1A2E", display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <span style={{ color: "#fff", fontSize: 17, fontFamily: "'DM Serif Display', serif", fontStyle: "italic" }}>e</span>
+          </div>
+          <span style={{ fontFamily: "'DM Serif Display', serif", fontSize: 22, color: "#1A1A2E" }}>CourseTrack</span>
+        </div>
+        <div style={{ fontSize: 15, fontWeight: 600, color: "#1A1A2E", marginBottom: 6 }}>Connect to Airtable</div>
+        <div style={{ fontSize: 13, color: "#8A8FA8", marginBottom: 24, lineHeight: 1.6 }}>
+          Paste your Airtable personal access token below. It's stored only in your browser and never sent anywhere except Airtable.
+        </div>
+        <label style={{ fontSize: 11.5, fontWeight: 600, color: "#8A8FA8", display: "block", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.06em" }}>Airtable Token</label>
+        <input
+          type="password" value={token} onChange={e => setToken(e.target.value)}
+          onKeyDown={e => e.key === "Enter" && test()}
+          placeholder="pat…"
+          style={{ width: "100%", padding: "10px 14px", border: "1.5px solid #EBEBEB", borderRadius: 8, fontSize: 13.5, outline: "none", color: "#1A1A2E", marginBottom: 12 }}
+        />
+        {error && <div style={{ fontSize: 12.5, color: "#E05C5C", marginBottom: 12 }}>{error}</div>}
+        <button onClick={test} disabled={testing || !token.trim()} style={{
+          width: "100%", padding: "11px", borderRadius: 8, border: "none",
+          background: testing || !token.trim() ? "#BBBCC0" : "#1A1A2E",
+          color: "#fff", cursor: testing || !token.trim() ? "not-allowed" : "pointer",
+          fontSize: 14, fontWeight: 500,
+        }}>{testing ? "Connecting…" : "Connect"}</button>
+        <div style={{ fontSize: 11.5, color: "#B0B3C0", marginTop: 14, lineHeight: 1.6 }}>
+          Get your token at <strong>airtable.com/create/tokens</strong> — needs read/write access to your CourseTrack base.
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Main App ──────────────────────────────────────────────────────────────────
+function App() {
+  const [token, setToken] = useState(() => localStorage.getItem("ct_token") || "");
+  const [tasks, setTasks] = useState([]);
+  const [courses, setCourses] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [view, setView] = useState("kanban");
+  const [filterCourse, setFilterCourse] = useState("All Courses");
+  const [filterAssignee, setFilterAssignee] = useState("");
+  const [editTask, setEditTask] = useState(null);
+  const [isNew, setIsNew] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [toast, setToast] = useState(null);
+
+  const showToast = (message, type = "success") => {
+    setToast({ message, type });
+    setTimeout(() => setToast(null), 3000);
+  };
+
+  const loadData = useCallback(async (tok) => {
+    setLoading(true);
+    try {
+      const [taskRecords, courseRecords] = await Promise.all([
+        fetchAllRecords(tok, TABLE_ID),
+        fetchAllRecords(tok, COURSES_TABLE).catch(() => []),
+      ]);
+      setTasks(taskRecords.map(recordToTask));
+      const courseNames = courseRecords.map(r => r.fields.Name).filter(Boolean);
+      setCourses(courseNames);
+    } catch (e) {
+      showToast("Failed to load data. Check your token.", "error");
+      setToken("");
+      localStorage.removeItem("ct_token");
+    }
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { if (token) loadData(token); }, [token]);
+
+  const handleSave = async (form) => {
+    setSaving(true);
+    try {
+      const fields = taskToFields(form);
+      if (isNew) {
+        const rec = await createRecord(token, fields);
+        setTasks(ts => [...ts, recordToTask(rec)]);
+        showToast("Task created!");
+      } else {
+        const rec = await updateRecord(token, form.airtableId, fields);
+        setTasks(ts => ts.map(t => t.airtableId === form.airtableId ? recordToTask(rec) : t));
+        showToast("Task saved!");
+      }
+      setEditTask(null);
+    } catch (e) { showToast("Save failed: " + e.message, "error"); }
+    setSaving(false);
+  };
+
+  const handleDelete = async (airtableId) => {
+    if (!confirm("Delete this task?")) return;
+    try {
+      await deleteRecord(token, airtableId);
+      setTasks(ts => ts.filter(t => t.airtableId !== airtableId));
+      setEditTask(null);
+      showToast("Task deleted.");
+    } catch (e) { showToast("Delete failed: " + e.message, "error"); }
+  };
+
+  if (!token) return <SetupScreen onConnect={tok => { setToken(tok); }} />;
+
+  const allCourses = [...new Set([...courses, ...tasks.map(t => t.course).filter(Boolean)])].sort();
+
+  const filtered = tasks
+    .filter(t => filterCourse === "All Courses" || t.course === filterCourse)
+    .filter(t => !filterAssignee || t.assignee === filterAssignee);
+
+  const stats = {
+    total: tasks.length,
+    inProgress: tasks.filter(t => t.status === "In Progress").length,
+    done: tasks.filter(t => t.status === "Done").length,
+    urgent: tasks.filter(t => t.priority === "High" && t.status !== "Done").length,
+  };
+
+  const VIEWS = [
+    { id: "kanban", label: "Board" },
+    { id: "list", label: "List" },
+    { id: "workload", label: "Workload" },
+  ];
+
+  return (
+    <div style={{ minHeight: "100vh", background: "#F6F6F9" }}>
+      {/* Header */}
+      <div style={{ background: "#fff", borderBottom: "1px solid #EBEBEB", padding: "0 32px" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", height: 60 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <div style={{ width: 32, height: 32, borderRadius: 8, background: "#1A1A2E", display: "flex", alignItems: "center", justifyContent: "center" }}>
+              <span style={{ color: "#fff", fontSize: 15, fontFamily: "'DM Serif Display', serif", fontStyle: "italic" }}>e</span>
+            </div>
+            <span style={{ fontFamily: "'DM Serif Display', serif", fontSize: 19, color: "#1A1A2E" }}>CourseTrack</span>
+            <span style={{ fontSize: 11.5, background: "#F0F0F3", color: "#8A8FA8", borderRadius: 5, padding: "2px 8px" }}>Content Team</span>
+          </div>
+          <div style={{ display: "flex", alignItems: "center" }}>
+            {TEAM.map((m, i) => (
+              <div key={m.id} title={m.name} style={{ marginLeft: i > 0 ? -8 : 0, border: "2px solid #fff", borderRadius: "50%" }}>
+                <Avatar member={m} size={30} />
+              </div>
+            ))}
+            <button onClick={() => loadData(token)} style={{ marginLeft: 16, padding: "7px 12px", background: "none", color: "#6B7080", border: "1px solid #EBEBEB", borderRadius: 8, cursor: "pointer", fontSize: 12.5 }}>↻ Refresh</button>
+            <button onClick={() => { setIsNew(true); setEditTask({}); }} style={{ marginLeft: 8, padding: "7px 16px", background: "#1A1A2E", color: "#fff", border: "none", borderRadius: 8, cursor: "pointer", fontSize: 13, fontWeight: 500 }}>+ New Task</button>
+            <button onClick={() => { localStorage.removeItem("ct_token"); setToken(""); setTasks([]); }} title="Disconnect" style={{ marginLeft: 8, padding: "7px 10px", background: "none", color: "#B0B3C0", border: "1px solid #EBEBEB", borderRadius: 8, cursor: "pointer", fontSize: 12 }}>⏏</button>
+          </div>
+        </div>
+      </div>
+
+      {/* Stats */}
+      <div style={{ background: "#fff", borderBottom: "1px solid #EBEBEB", padding: "12px 32px", display: "flex", gap: 8, alignItems: "center" }}>
+        {[
+          { label: "Total Tasks", value: stats.total, color: "#1A1A2E" },
+          { label: "In Progress", value: stats.inProgress, color: "#6B7FD7" },
+          { label: "Completed", value: stats.done, color: "#5AA88A" },
+          { label: "Urgent", value: stats.urgent, color: "#E05C5C" },
+        ].map((s, i) => (
+          <React.Fragment key={s.label}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "0 16px" }}>
+              <span style={{ fontSize: 22, fontWeight: 700, color: s.color, fontFamily: "'DM Serif Display', serif" }}>{s.value}</span>
+              <span style={{ fontSize: 12, color: "#8A8FA8" }}>{s.label}</span>
+            </div>
+            {i < 3 && <div style={{ width: 1, height: 20, background: "#EBEBEB" }} />}
+          </React.Fragment>
+        ))}
+      </div>
+
+      {/* Toolbar */}
+      <div style={{ padding: "16px 32px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+        <div style={{ display: "flex", gap: 4, background: "#fff", border: "1px solid #EBEBEB", borderRadius: 8, padding: 3 }}>
+          {VIEWS.map(v => (
+            <button key={v.id} onClick={() => setView(v.id)} style={{ padding: "6px 16px", borderRadius: 6, border: "none", cursor: "pointer", background: view === v.id ? "#1A1A2E" : "transparent", color: view === v.id ? "#fff" : "#6B7080", fontSize: 12.5, fontWeight: 500, transition: "all 0.15s" }}>{v.label}</button>
+          ))}
+        </div>
+        <div style={{ display: "flex", gap: 10 }}>
+          <select value={filterCourse} onChange={e => setFilterCourse(e.target.value)} style={{ padding: "7px 12px", border: "1px solid #EBEBEB", borderRadius: 7, fontSize: 12.5, color: "#4A4D5E", background: "#fff", outline: "none" }}>
+            <option>All Courses</option>
+            {allCourses.map(c => <option key={c}>{c}</option>)}
+          </select>
+          <select value={filterAssignee} onChange={e => setFilterAssignee(e.target.value)} style={{ padding: "7px 12px", border: "1px solid #EBEBEB", borderRadius: 7, fontSize: 12.5, color: "#4A4D5E", background: "#fff", outline: "none" }}>
+            <option value="">All Members</option>
+            {TEAM.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+          </select>
+        </div>
+      </div>
+
+      {/* Main */}
+      <div style={{ padding: "0 32px 32px" }}>
+        {loading ? <Spinner /> : (
+          <>
+            {view === "kanban" && <KanbanView tasks={filtered} team={TEAM} onEdit={t => { setIsNew(false); setEditTask(t); }} />}
+            {view === "list" && <ListView tasks={filtered} team={TEAM} onEdit={t => { setIsNew(false); setEditTask(t); }} />}
+            {view === "workload" && <WorkloadView tasks={filtered} team={TEAM} />}
+          </>
+        )}
+      </div>
+
+      {editTask !== null && (
+        <TaskModal
+          task={isNew ? null : editTask}
+          team={TEAM}
+          courses={allCourses}
+          onClose={() => setEditTask(null)}
+          onSave={handleSave}
+          onDelete={handleDelete}
+          isNew={isNew}
+          saving={saving}
+        />
+      )}
+
+      {toast && <Toast message={toast.message} type={toast.type} />}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>
